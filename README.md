@@ -5,9 +5,21 @@
 * 关闭stfill，全地址W-W有序，W-R有序
 * 开TSO, 全地址R-R有序、W-W有序、W-R有序
 
-## 快速配置
+## 使用方法
 
-`make config`编译配置程序：
+`make`编译config程序和内核模块（需要安装内核头文件）
+
+`sudo insmod ./mem-model-config.ko`
+
+dmesg检查打印下面日志
+```
+[256526.211779] create file /sys/kernel/loongarch_csr/stfill.
+[256526.211781] create file /sys/kernel/loongarch_csr/tso_disabled
+```
+
+需要成功安装内核模块才能进行后续配置。
+
+## 快速配置
 
 使用：
 

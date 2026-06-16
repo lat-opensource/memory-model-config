@@ -7,7 +7,7 @@ ifneq ($(KERNELRELEASE),)
 # If we running without kernel build system
 # core driver code
 obj-m += mem-model-config.o
-mem-model-config-objs := main.o tso.o stfill.o
+mem-model-config-objs := main.o memory_model.o
 
 else
 

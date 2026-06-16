@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
 #include <array>
-#include <complex.h>
 #include <cstdio>
 #include <cstring>
 #include <iostream>
@@ -11,131 +10,101 @@
 #include <unistd.h>
 using namespace std;
 
-enum CONFIG_TYPE {
-    TSO,
-    STFILL,
-};
+static const char SYSFS_PATH[] = "/sys/kernel/loongarch_csr/memory_model";
 
-bool exit_ = false;
+static const char* mode_names[] = {"weak", "store", "tso"};
 
 string exec(const char* cmd)
 {
     array<char, 128> buffer;
     string result;
-    unique_ptr<FILE, decltype(&pclose)> pipe(popen(cmd, "r"), pclose);
 
-    if (!pipe) {
+    struct PipeCloser {
+        void operator()(FILE* f) const { pclose(f); }
+    };
+    unique_ptr<FILE, PipeCloser> pipe(popen(cmd, "r"));
+
+    if (!pipe)
         throw runtime_error("popen() failed!");
-    }
 
-    while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
+    while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr)
         result += buffer.data();
-    }
 
     return result;
 }
-string get_config_name(CONFIG_TYPE which)
-{
-    switch (which) {
-    case TSO:
-        return "tso_disabled";
-        break;
-    case STFILL:
-        return "stfill";
-        break;
-    default:
-        return "";
-        break;
-    }
-    return "";
-}
 
-void show_value(CONFIG_TYPE which)
+static int read_mode()
 {
-    string config_name = get_config_name(which);
-    string Command = "cat /sys/kernel/loongarch_csr/" + config_name;
     try {
-        string output = exec(Command.c_str());
-        cout << config_name << ":" << output << endl;
+        string s = exec((string("cat ") + SYSFS_PATH).c_str());
+        return s[0] - '0';
     } catch (const runtime_error& e) {
-        cerr << "get value failed: " << e.what() << endl;
+        cerr << "read failed: " << e.what() << endl;
+        return -1;
     }
 }
-void set_value(CONFIG_TYPE which, string value)
-{
-    string config_name = get_config_name(which);
-    // echo 0  > /sys/kernel/loongarch_csr/tso_disabled
 
-    string Command = "su -c 'echo " + value + " > /sys/kernel/loongarch_csr/" + config_name + "'";
+static bool set_mode(int val)
+{
+    string cmd = "su -c 'echo " + to_string(val) + " > " + SYSFS_PATH + "'";
     try {
-        string output = exec(Command.c_str());
-        cout << "success." << endl
-             << "new value:" << endl;
-        show_value(which);
+        exec(cmd.c_str());
+        return (read_mode() == val);
     } catch (const runtime_error& e) {
-        cerr << "failed: " << e.what() << endl;
+        cerr << "write failed: " << e.what() << endl;
+        return false;
     }
 }
 
-void print_help()
+static void show_status()
 {
-    cout << endl
-         << "Usage:" << endl;
-    cout << "   - sudo ./config -h" << endl;
-    cout << "   - sudo ./config tso enable" << endl;
-    cout << "   - sudo ./config tso disable" << endl;
-    cout << "   - sudo ./config tso show" << endl;
-    cout << "   - sudo ./config stfill enable" << endl;
-    cout << "   - sudo ./config stfill disable" << endl;
-    cout << "   - sudo ./config stfill show" << endl;
+    int m = read_mode();
+    if (m >= 0 && m <= 2)
+        cout << "\n  current: " << mode_names[m] << " (" << m << ")\n";
+    else
+        cout << "\n  unable to read (run as root, insmod first?)\n";
 }
-int main(int argv, char* argc[])
+
+int main()
 {
-
-    if (argv == 2 && strcmp(argc[1], "-h") == 0) {
-        print_help();
-        return 0;
-    }
-
-    if (argv != 3) {
-        cout << "please input 2 args" << endl;
-        print_help();
-        return 0;
-    }
     if (geteuid() != 0) {
-        cout << "Please rerun the program with 'sudo'." << endl;
-        print_help();
-        return 0;
-    }
-    string config_which = argc[1];
-    string config_operation = argc[2];
-
-    if (config_which == "tso") {
-        if (config_operation == "show") {
-            show_value(TSO);
-        } else if (config_operation == "enable") {
-            set_value(TSO, "0");
-        } else if (config_operation == "disable") {
-            set_value(TSO, "1");
-
-        } else {
-            cout << "please input 'show', 'disable' or 'enable'." << endl;
-        }
-    } else if (config_which == "stfill") {
-        if (config_operation == "show") {
-            show_value(STFILL);
-        } else if (config_operation == "enable") {
-            set_value(STFILL, "1");
-        } else if (config_operation == "disable") {
-            set_value(STFILL, "0");
-        } else {
-            cout << "please input 'show', 'disable' or 'enable'." << endl;
-        }
-    } else {
-        cout << "please input correct config name." << endl;
-        print_help();
-        return 0;
+        cerr << "Please run with sudo.\n";
+        return 1;
     }
 
+    cout << "LoongArch Memory Model Config\n"
+         << "==============================\n";
+
+    while (true) {
+        show_status();
+        cout << "\n"
+             << "  [0] weak    (no ordering)\n"
+             << "  [1] store   (store-store ordered)\n"
+             << "  [2] tso     (store + load ordered)\n"
+             << "  [q] quit\n"
+             << "\n"
+             << "  choice: ";
+        cout.flush();
+
+        string input;
+        getline(cin, input);
+
+        if (input.empty())
+            continue;
+        char c = input[0];
+        if (c == 'q' || c == 'Q')
+            break;
+        if (c >= '0' && c <= '2') {
+            int val = c - '0';
+            cout << "  switching to " << mode_names[val] << "... ";
+            cout.flush();
+            if (set_mode(val))
+                cout << "OK\n";
+            else
+                cout << "FAIL\n";
+        }
+    }
+
+    cout << "\nbye\n";
     return 0;
 }
